@@ -10,6 +10,8 @@ import morgan from 'morgan';
 import { logger } from '../utils/logger';
 import { swarmIntelligence } from '../intelligence/swarm';
 import type { ScanType } from '../intelligence/swarm';
+import { heartbeatAggregator } from '../heartbeat/heartbeat-aggregator';
+import type { Heartbeat } from '../heartbeat/heartbeat-aggregator';
 
 
 // ============================================================================
@@ -174,6 +176,130 @@ export function createServer(): express.Application {
 
   // Stats
   app.get('/api/v1/stats', (_req, res) => res.json(swarmIntelligence.getStats()));
+
+  // ───── Heartbeat Endpoints ──────────────────────────────────────────────
+  
+  /**
+   * POST /api/v1/heartbeat
+   * Receive heartbeat from a service
+   */
+  app.post('/api/v1/heartbeat', (req, res) => {
+    try {
+      const heartbeat: Heartbeat = {
+        ...req.body,
+        id: req.body.id || `hb_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        timestamp: new Date(req.body.timestamp || Date.now()),
+      };
+      
+      heartbeatAggregator.receiveHeartbeat(heartbeat);
+      
+      res.status(202).json({ 
+        received: true, 
+        heartbeatId: heartbeat.id,
+        timestamp: heartbeat.timestamp,
+      });
+    } catch (err) {
+      logger.error({ err }, 'Heartbeat ingestion error');
+      res.status(500).json({ error: 'Heartbeat ingestion failed', details: String(err) });
+    }
+  });
+
+  /**
+   * GET /api/v1/health/aggregated
+   * Get aggregated health of all services
+   */
+  app.get('/api/v1/health/aggregated', (_req, res) => {
+    try {
+      const health = heartbeatAggregator.aggregateHealth();
+      res.json(health);
+    } catch (err) {
+      res.status(500).json({ error: 'Health aggregation failed', details: String(err) });
+    }
+  });
+
+  /**
+   * GET /api/v1/health/services/:serviceId
+   * Get health details for a specific service
+   */
+  app.get('/api/v1/health/services/:serviceId', (req, res) => {
+    try {
+      const serviceHealth = heartbeatAggregator.getServiceHealth(req.params.serviceId);
+      if (!serviceHealth) {
+        return res.status(404).json({ error: 'Service not found' });
+      }
+      res.json(serviceHealth);
+    } catch (err) {
+      res.status(500).json({ error: 'Service health retrieval failed', details: String(err) });
+    }
+  });
+
+  /**
+   * GET /api/v1/health/services
+   * Get health status of all services
+   */
+  app.get('/api/v1/health/services', (_req, res) => {
+    try {
+      const services = heartbeatAggregator.getAllServiceHealth();
+      res.json({ count: services.length, services });
+    } catch (err) {
+      res.status(500).json({ error: 'Service health retrieval failed', details: String(err) });
+    }
+  });
+
+  /**
+   * GET /api/v1/health/alerts
+   * Get health alerts
+   */
+  app.get('/api/v1/health/alerts', (req, res) => {
+    try {
+      const alerts = heartbeatAggregator.getAlerts(
+        req.query.serviceId as string,
+        req.query.resolved ? req.query.resolved === 'true' : undefined
+      );
+      res.json({ count: alerts.length, alerts });
+    } catch (err) {
+      res.status(500).json({ error: 'Alert retrieval failed', details: String(err) });
+    }
+  });
+
+  /**
+   * POST /api/v1/health/alerts/:alertId/resolve
+   * Resolve a health alert
+   */
+  app.post('/api/v1/health/alerts/:alertId/resolve', (req, res) => {
+    try {
+      heartbeatAggregator.resolveAlert(req.params.alertId);
+      res.json({ resolved: true });
+    } catch (err) {
+      res.status(500).json({ error: 'Alert resolution failed', details: String(err) });
+    }
+  });
+
+  /**
+   * GET /api/v1/health/incidents
+   * Get active health incidents
+   */
+  app.get('/api/v1/health/incidents', (_req, res) => {
+    try {
+      const incidents = heartbeatAggregator.getActiveIncidents();
+      res.json({ count: incidents.length, incidents });
+    } catch (err) {
+      res.status(500).json({ error: 'Incident retrieval failed', details: String(err) });
+    }
+  });
+
+  /**
+   * GET /api/v1/health/stats
+   * Get health statistics
+   */
+  app.get('/api/v1/health/stats', (_req, res) => {
+    try {
+      const stats = heartbeatAggregator.getStats();
+      res.json(stats);
+    } catch (err) {
+      res.status(500).json({ error: 'Health stats retrieval failed', details: String(err) });
+    }
+  });
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
